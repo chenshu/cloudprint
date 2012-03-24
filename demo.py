@@ -19,20 +19,36 @@ appid = 50033
 appsecret = 'Vulid3u3lVMBVRDbNJE0aI6QMKhjHiqK';
 
 class Client(object):
+    '''cloud printer client'''
 
-    def __init__(self):
+    def __init__(self, printer_name):
+        # client id
         self.client = None
+        # client secret
         self.secret = None
+        # session for login
         self.session = None
+
         self.nsp = NSPClient(appid, appsecret)
         self.svc_auth = self.nsp.service('nsp.auth')
+
+        # local directory
         self.dirname = os.path.dirname(os.path.realpath(__file__))
+
+        # config info of client
         self.filename = '%s/client.conf' % (self.dirname)
+
+        # check if client already init
         self.check()
 
+        self.printer_name = printer_name
+
     def check(self):
+        '''init client'''
+
         if not os.path.exists(self.filename):
             self.create()
+
         infos = dict()
         with open('%s' % (self.filename), 'r') as fp:
             for line in fp:
@@ -41,21 +57,27 @@ class Client(object):
         self.__dict__.update(infos)
 
     def create(self):
+        '''create client'''
+
         ret = self.svc_auth.createClient(1)
         if 'errCode' in ret or 'errMsg' in ret:
             raise RuntimeError, "create client failure: code=%s\tmsg=%s" % (ret['errCode'], ret['errMsg'])
         client = ret['client']
         secret = ret['secret']
-        if client is not None and client != '' \
-                and secret is not None and secret != '':
-                    with open('%s' % (self.filename), 'w+') as fp:
-                        fp.write('client=%s\n' % (client))
-                        fp.write('secret=%s\n' % (secret))
+        if client is None or client == '' \
+                or secret is None or secret != '':
+            raise RuntimeError, "create client failure: client=%s\tsecret=%s" % (client, secret)
+        with open('%s' % (self.filename), 'w+') as fp:
+            fp.write('client=%s\n' % (client))
+            fp.write('secret=%s\n' % (secret))
 
     def login(self, username, password):
+        '''sign in dbank account'''
+
         if username is None or username == '' \
                 and password is None or password == '':
                     return False
+
         url = 'http://login.dbank.com/accounts/loginAuth'
         params = urlencode({'userDomain.user.email' : username, 'userDomain.user.password' : password, 'ru' : 'http://www.dbank.com/ServiceLogin.action'})
         self.cookie = cookielib.CookieJar()
@@ -72,7 +94,6 @@ class Client(object):
             ('Referer', 'http://www.dbank.com/'),
             ('User-Agent', 'Mozilla/5.0 (Windows NT 5.1) AppleWebKit/535.7 (KHTML, like Gecko) Chrome/16.0.912.63 Safari/535.7')
         ]
-
         request = Request(url, params)
         response = self.opener.open(request)
         info = response.info()
@@ -84,21 +105,32 @@ class Client(object):
                 self.secret = cookie.value
             elif cookie.name == 'session':
                 self.session = cookie.value
+
+        if self.client is None or self.client == '' \
+                or self.secret is None or self.secret == '' \
+                or self.session is None or self.session == '':
+                    return False
+
         self.nsp = NSPClient(self.session, self.secret)
         self.svc_msg = self.nsp.service('nsp.user.push')
         return True
 
     def subscribe(self):
+        '''subscribe message'''
+
         self.message_type = 'nsp.app.cloudprint'
         ret = self.svc_msg.subscribe(self.message_type)
         if ret is None or ret == '' \
                 or 'nsp.http.query.status' not in ret or ret['nsp.http.query.status'] != '200':
                     return False
+
         interval = ret['nsp.http.query.interval']
         url = ret['nsp.http.query.url']
         return url
 
     def get(self, url, referer = ''):
+        '''get method of http'''
+
         host = urlparse(url).hostname
         self.opener = build_opener()
         self.opener.addheaders = [
@@ -108,14 +140,40 @@ class Client(object):
             ('Accept-Language', 'zh-CN,zh;q=0.8'),
             ('Connection', 'keep-alive'),
             ('Host', host),
-            ('Referer', referer),
             ('User-Agent', 'Mozilla/5.0 (Windows NT 5.1) AppleWebKit/535.7 (KHTML, like Gecko) Chrome/16.0.912.63 Safari/535.7')
         ]
+        if referer is not None and referer != '':
+            self.opener.addheaders.append(('Referer', referer))
 
         request = Request(url)
         response = self.opener.open(request)
         info = response.info()
         return response.read()
+
+    def print_file(self, dirname, filename):
+        '''print file by ext'''
+
+        ext = os.path.splitext(filename)[1]
+        if ext == '.pdf':
+            pdf_file = '%s/%s' % (dirname, filename)
+            ps_file = '%s/%s.ps' % (dirname, filename)
+            call(['/usr/bin/pdftops', pdf_file, ps_file])
+            if not os.path.exists(ps_file):
+                os.remove(pdf_file)
+                return False
+            call(['/usr/bin/lpr', '-P', self.printer_name, ps_file])
+            os.remove(ps_file)
+        elif ext == '.txt':
+            txt_file = '%s/%s' % (dirname, filename)
+            call(['/usr/bin/lpr', '-P', self.printer_name, txt_file])
+        else:
+            return False
+        return True
+
+def md5_for_data(data):
+    md5 = hashlib.md5()
+    md5.update(data)
+    return md5.hexdigest()
 
 def md5_for_file(fp, block_size=2**20):
     md5 = hashlib.md5()
@@ -126,22 +184,22 @@ def md5_for_file(fp, block_size=2**20):
         md5.update(data)
     return md5.hexdigest()
 
-def md5_for_data(data):
-    md5 = hashlib.md5()
-    md5.update(data)
-    return md5.hexdigest()
-
-def main():
-    client = Client()
-    print 'login...'
+def main(printer_name):
+    print 'init client...'
+    client = Client(printer_name)
+    print 'login account...'
     ret = client.login('13810329910', 'xxxxxx')
     print 'client: ', client.client
     if ret is True:
         print 'connecting server...'
         url = client.subscribe()
         referer = ''
+        if url is None or url is False:
+            print 'could not connect server...'
+            sys.exit(-1)
         while True:
             try:
+                # 获取push消息
                 ret = client.get(url, referer)
                 referer = url
                 res = sj.loads(ret)
@@ -154,27 +212,30 @@ def main():
                 url = header['nsp.http.query.url']
                 if interval != '0':
                     sleep(float(interval))
-                if 'nsp.message.type' not in header or header['nsp.message.type'] != client.message_type \
-                        or 'nsp.event.type' not in header or header['nsp.event.type'] != client.message_type:
-                            continue
-                body = res['body']
-                uid = body['nsp.event.uid'] if 'nsp.event.uid' in body else None
-                cid = body['nsp.event.cid'] if 'nsp.event.cid' in body else None
-                if uid is None and cid is None:
+                if 'nsp.message.type' not in header or 'nsp.event.type' not in header:
                     continue
-                action = body['ac']
-                data = body['data']
-                if action == '1001':
-                    files = data['files']
+                if header['nsp.message.type'] != client.message_type or header['nsp.event.type'] != client.message_type:
+                    print 'error\tmessage type error\t%s' % (header)
+                    continue
+                body = res['body']
+                uid = body['nsp.event.uid'] if 'nsp.event.uid' in body else ''
+                cid = body['nsp.event.cid'] if 'nsp.event.cid' in body else ''
+                if (uid == '' and cid == '') or (cid != '' and cid != client.client):
+                    print 'error\tmessage owner error\t%s\t%s\t%s' % (uid, cid, client.client)
+                    continue
+                print 'receiving message...'
+                action = body['action']
+                files = body['files']
+                if action == 'print':
                     for f in files:
                         print 'downloading...', f['name'], f['size'], f['md5']
                         content = client.get(f['url'], 'http://www.dbank.com')
                         if len(content) != int(f['size']):
                             print 'error\tfile size error\t%s\t%s' % (len(content), int(f['size']))
                             continue
-                        pdf_file = '%s/%s' % (client.dirname, f['name'])
+                        origin_file = '%s/%s' % (client.dirname, f['name'])
                         file_md5 = ''
-                        with open(pdf_file, 'w+') as fp:
+                        with open(origin_file, 'w+') as fp:
                             file_md5 = md5_for_data(content)
                             if file_md5 != f['md5']:
                                 print 'error\tfile md5 error\t%s\t%s' % (file_md5, f['md5'])
@@ -182,16 +243,13 @@ def main():
                             fp.write(content)
                         print 'download success...'
                         print 'printing...'
-                        ps_file = '%s/%s.ps' % (client.dirname, f['name'])
-                        call(['/usr/bin/pdftops', pdf_file, ps_file])
-                        if not os.path.exists(ps_file):
+                        ret = client.print_file(client.dirname, f['name'])
+                        if ret is False:
                             print 'error\tprint error'
-                            os.remove(pdf_file)
+                            os.remove(origin_file)
                             continue
-                        call(['/usr/bin/lpr', '-P', 'hp_p2015dn', ps_file])
-                        os.remove(pdf_file)
-                        os.remove(ps_file)
-                        print 'print success'
+                        os.remove(origin_file)
+                        print 'print success...'
                 else:
                     pass
             except HTTPError, e:
@@ -202,4 +260,7 @@ def main():
         print 'error\tlogin failure'
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) < 2:
+        print 'error\tneed printer name'
+        sys.exit(-1)
+    main(sys.argv[1])
