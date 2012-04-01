@@ -7,16 +7,21 @@ import sys
 import os.path
 import hashlib
 from nsp import NSPClient
-from time import sleep
+from time import sleep, time
 import cookielib
 from urllib import urlencode
 from urllib2 import build_opener, HTTPCookieProcessor, HTTPError, URLError, Request
 from urlparse import urlparse
 import simplejson as sj
 from subprocess import call
+import random
+import socket
+import getpass
+from hashlib import md5
 
 appid = 50033
 appsecret = 'Vulid3u3lVMBVRDbNJE0aI6QMKhjHiqK';
+seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 class Client(object):
     '''cloud printer client'''
@@ -118,7 +123,8 @@ class Client(object):
     def subscribe(self):
         '''subscribe message'''
 
-        self.message_type = 'nsp.app.cloudprint'
+        #self.message_type = 'nsp.cloudprint'
+        self.message_type = 'nsp.push.resource'
         ret = self.svc_msg.subscribe(self.message_type)
         if ret is None or ret == '' \
                 or 'nsp.http.query.status' not in ret or ret['nsp.http.query.status'] != '200':
@@ -157,18 +163,35 @@ class Client(object):
         if ext == '.pdf':
             pdf_file = '%s/%s' % (dirname, filename)
             ps_file = '%s/%s.ps' % (dirname, filename)
-            call(['/usr/bin/pdftops', pdf_file, ps_file])
+            #call(['/usr/bin/pdftops', pdf_file, ps_file])
             if not os.path.exists(ps_file):
                 os.remove(pdf_file)
                 return False
-            call(['/usr/bin/lpr', '-P', self.printer_name, ps_file])
+            #call(['/usr/bin/lpr', '-P', self.printer_name, ps_file])
             os.remove(ps_file)
         elif ext == '.txt':
             txt_file = '%s/%s' % (dirname, filename)
-            call(['/usr/bin/lpr', '-P', self.printer_name, txt_file])
+            #call(['/usr/bin/lpr', '-P', self.printer_name, txt_file])
         else:
             return False
         return True
+
+    def createAuthUrl(self):
+        machine = '%s@%s' % (getusername(), gethostname())
+        h = ('%s' % (time())).split('.')[0]
+        v = md5('%s%s%s%s' % (self.client, machine, self.printer_name, h)).hexdigest()[0:8]
+        return 'http://apps.dbank.com/cloudprint/register.php?cid=%s&machine=%s&printer=%s&h=%s&v=%s' % (self.client, machine, self.printer_name, h, v)
+
+def getusername():
+    return getpass.getuser()
+
+def gethostname():
+    return socket.gethostname()
+
+def generate(seed, n):
+    if type(seed) is not list:
+        seed = list(seed)
+    return ''.join([random.choice(seed) for i in range(n) if random.shuffle(seed) is None])
 
 def md5_for_data(data):
     md5 = hashlib.md5()
@@ -188,6 +211,8 @@ def main(printer_name):
     print 'init client...'
     client = Client(printer_name)
     print 'login account...'
+    auth_url = client.createAuthUrl()
+    print 'url: %s' % (auth_url)
     ret = client.login('13810329910', 'xxxxxx')
     print 'client: ', client.client
     if ret is True:
@@ -201,6 +226,7 @@ def main(printer_name):
             try:
                 # 获取push消息
                 ret = client.get(url, referer)
+                print ret
                 referer = url
                 res = sj.loads(ret)
                 header = res['header']
@@ -212,6 +238,7 @@ def main(printer_name):
                 url = header['nsp.http.query.url']
                 if interval != '0':
                     sleep(float(interval))
+                continue
                 if 'nsp.message.type' not in header or 'nsp.event.type' not in header:
                     continue
                 if header['nsp.message.type'] != client.message_type or header['nsp.event.type'] != client.message_type:
@@ -246,9 +273,11 @@ def main(printer_name):
                         ret = client.print_file(client.dirname, f['name'])
                         if ret is False:
                             print 'error\tprint error'
-                            os.remove(origin_file)
+                            if not os.path.exists(origin_file):
+                                os.remove(origin_file)
                             continue
-                        os.remove(origin_file)
+                        if not os.path.exists(origin_file):
+                            os.remove(origin_file)
                         print 'print success...'
                 else:
                     pass

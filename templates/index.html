@@ -1,0 +1,13 @@
+<html>
+    <head>
+        <title>云打印</title>
+    </head>
+    <body>
+        <script language="javascript">
+            var value = window.name;
+            value = eval('(' + value + ')');
+            location = "/cloudprint/auth/login" + location.search + "&sid=" + value.sid + "&secret=" + value.secret;
+        </script>
+    </body>
+
+</html>
