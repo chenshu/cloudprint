@@ -2,10 +2,12 @@
 # -*- coding:utf-8 -*-
 
 import os
+import sys
 import time
 import socket
 import urllib
 import os.path
+import hashlib
 import getpass
 import logging
 import urlparse
@@ -16,15 +18,18 @@ import tornado.options
 import tornado.httpclient
 from tornado.options import define, options
 from tornado.escape import json_encode, json_decode
-from hashlib import md5
 from nsp import NSPClient
+from subprocess import call
+from datetime import datetime
+from urllib import urlencode
+from urllib2 import build_opener, HTTPCookieProcessor, HTTPError, URLError, Request
 
 define("port", default=8888, help="run on the given port", type=int)
 define("appid", default=50033, type=int)
-define("appname", default='云打印', type=str)
-define("appsecret", default='Vulid3u3lVMBVRDbNJE0aI6QMKhjHiqK', type=str)
-define("printer", default='hp_p2015dn,P2015dn', type=str)
-define("capability", default='nsp.cloudprint', type=str)
+define("appname", default=u'云打印', type=str)
+define("appsecret", default=u'Vulid3u3lVMBVRDbNJE0aI6QMKhjHiqK', type=str)
+define("printer", default=u'', type=str)
+define("capability", default=u'nsp.cloudprint', type=str)
 
 class Application(tornado.web.Application):
     def __init__(self, **kwargs):
@@ -35,7 +40,7 @@ class Application(tornado.web.Application):
             (r"/cloudprint/register", RegisterHandler),
         ]
         settings = dict(
-            cookie_secret="43oETzKXQAGaYdkL5gEmGeJJFuYh7EQnp2XdTP1o/Vo=",
+            cookie_secret="43oETzCXQAGaYdkL5gEiGeJJFuYX7EQnp2QdTP1o/Vo=",
             login_url="/cloudprint/auth/login",
             template_path=os.path.join(os.path.dirname(__file__), "templates"),
             static_path=os.path.join(os.path.dirname(__file__), "static"),
@@ -53,6 +58,13 @@ class BaseHandler(tornado.web.RequestHandler):
         secret = self.get_secure_cookie("secret")
         if not sid or not secret:
             return None
+        self.nsp_user = NSPClient(sid, secret)
+        svc_user = self.nsp_user.service('nsp.user')
+        ret = svc_user.getInfo(['user.uid', 'user.username'])
+        if ret is None or 'user.uid' not in ret or ret['user.uid'] == '':
+            return None
+        self.uid = '%s' % (ret['user.uid'])
+        self.username = '%s' % (ret['user.username'])
         return True
 
 class MainHandler(BaseHandler):
@@ -104,15 +116,21 @@ class AuthLogoutHandler(BaseHandler):
 class RegisterHandler(BaseHandler):
     @tornado.web.authenticated
     def get(self):
-        sid = self.get_secure_cookie("sid")
-        secret = self.get_secure_cookie("secret")
         machine = '%s@%s' % (getusername(), gethostname())
-        self.nsp = NSPClient(sid, secret)
         attrs = {options.capability : {'app_name' : options.appname, 'client_id' : self.application.settings['client'].client, 'client_name' : machine, 'printer' : self.application.settings['client'].printer}}
-        self.svc = self.nsp.service('nsp.app.capability')
+        self.svc = self.nsp_user.service('nsp.app.capability')
         ret = self.svc.register(attrs)
         if ret is True:
-            # TODO update config
+            client = self.settings['client']
+            if getattr(client, 'admin', None) is None:
+                client.admin = self.uid
+                with open('%s' % (client.conf_file), 'a+') as fp:
+                    fp.write('admin=%s\n' % (self.uid))
+            if self.uid not in client.users:
+                client.users[self.uid] = {'uid' : self.uid, 'username' : self.username, 'status' : '1', 'regdate' : datetime.now()}
+                with open('%s' % (client.data_file), 'a+') as fp:
+                    user = client.users[self.uid]
+                    fp.write('%s\t%s\t%s\t%s%s' % (user['uid'], user['username'], user['status'], user['regdate'].strftime('%Y-%m-%d %H:%M:%S'), os.linesep))
             self.write('register success<br/>')
         else:
             self.write('register failure<br/>')
@@ -126,20 +144,20 @@ class Client(object):
         self.client = None
         # client secret
         self.secret = None
-        # session for login
-        self.session = None
 
-        self.nsp = NSPClient(options.appid, options.appsecret)
-        self.svc_auth = self.nsp.service('nsp.auth')
+        self.nsp_app = NSPClient(options.appid, options.appsecret)
 
         # local directory
         self.dirname = os.path.dirname(os.path.realpath(__file__))
 
-        # config info of client
-        self.filename = '%s/client.conf' % (self.dirname)
+        self.conf_file = '%s/conf.ini' % (self.dirname)
+
+        self.data_file = '%s/data.ini' % (self.dirname)
 
         # check if client already init
         self.check()
+
+        self.nsp_push = NSPClient('%s@%s' % (self.client, options.appid), '%s@%s' % (self.secret, options.appsecret))
 
         self.printer = printers.split(',')
 
@@ -148,52 +166,154 @@ class Client(object):
     def check(self):
         '''init client'''
 
-        if not os.path.exists(self.filename):
-            self.create()
-
         infos = dict()
-        with open('%s' % (self.filename), 'r') as fp:
+        if not os.path.exists(self.conf_file):
+            self.create()
+        with open('%s' % (self.conf_file), 'r') as fp:
             for line in fp:
                 k, v = line.strip().split('=')
                 infos[k] = v
+        if 'client' not in infos or 'secret' not in infos:
+            self.create()
         self.__dict__.update(infos)
+
+        users = dict()
+        if not os.path.exists(self.data_file):
+            with open(self.data_file, 'w') as fp:
+                pass
+        else:
+            with open(self.data_file, 'r') as fp:
+                for line in fp:
+                    uid, username, status, regdate = line.strip().split('\t')
+                    users[uid] = {'uid' : uid, 'username' : username, 'status' : status, 'regdate' : datetime.strptime(regdate, '%Y-%m-%d %H:%M:%S')}
+        self.__dict__['users'] = users
 
     def create(self):
         '''create client'''
 
-        ret = self.svc_auth.createClient(1)
+        svc_auth = self.nsp_app.service('nsp.auth')
+        ret = svc_auth.createClient(1)
         if 'errCode' in ret or 'errMsg' in ret:
-            raise RuntimeError, "create client failure: code=%s\tmsg=%s" % (ret['errCode'], ret['errMsg'])
-        client = ret['client']
-        secret = ret['secret']
-        if client is None or client == '' \
-                or secret is None or secret == '':
-            raise RuntimeError, "create client failure: client=%s\tsecret=%s" % (client, secret)
-        with open('%s' % (self.filename), 'w+') as fp:
-            fp.write('client=%s\n' % (client))
-            fp.write('secret=%s\n' % (secret))
+            raise RuntimeError, "create client failure: %s" % (ret)
+        self.client = ret['client']
+        self.secret = ret['secret']
+        if self.client is None or self.client == '' \
+                or self.secret is None or self.secret == '':
+            raise RuntimeError, "create client failure: %s" % (ret)
+        with open('%s' % (self.conf_file), 'w+') as fp:
+            fp.write('client=%s\n' % (self.client))
+            fp.write('secret=%s\n' % (self.secret))
 
     def subscribe(self):
         '''subscribe message'''
 
-        #self.message_type = 'nsp.cloudprint'
-        self.message_type = 'nsp.push.resource'
-        ret = self.svc_msg.subscribe(self.message_type)
+        message_type = 'nsp.cloudprint'
+        svc_push = self.nsp_push.service('nsp.user.push')
+        ret = svc_push.subscribe(message_type)
         if ret is None or ret == '' \
                 or 'nsp.http.query.status' not in ret or ret['nsp.http.query.status'] != '200':
-                    return False
-
+                    raise RuntimeError, "subscribe message failure: %s" % (ret)
         interval = ret['nsp.http.query.interval']
         url = ret['nsp.http.query.url']
         return url
 
+    def download(self, url, **headers):
+        '''get method of http'''
+
+        host = urlparse.urlparse(url).hostname
+        opener = build_opener()
+        opener.addheaders = [(k, headers[k]) for k in headers]
+        opener.addheaders.append(('Host', host))
+        request = Request(url)
+        response = opener.open(request)
+        info = response.info()
+        return response.read()
+
+    def print_file(self, dirname, filename, printer):
+        '''print file by ext'''
+
+        ext = os.path.splitext(filename)[1]
+        if ext == '.pdf':
+            pdf_file = '%s/%s' % (dirname, filename)
+            ps_file = '%s/%s.ps' % (dirname, filename)
+            call(['/usr/bin/pdftops', pdf_file, ps_file])
+            if not os.path.exists(ps_file):
+                return False
+            #call(['/usr/bin/lpr', '-P', printer, ps_file])
+            os.remove(ps_file)
+        elif ext == '.txt':
+            txt_file = '%s/%s' % (dirname, filename)
+            #call(['/usr/bin/lpr', '-P', printer, txt_file])
+        else:
+            return False
+        return True
+
     def handle_request(self, response):
+        waittime = time.time()
         if response.error:
-            print "Error:", response.error
+            logging.error(response.error)
+            url = self.subscribe()
+            logging.info('push tunnel:\t%s' % (url))
+            waittime = waittime + 10
         else:
             json = json_decode(response.body)
-            print "Fetched " + str(len(json["entries"])) + " entries " + "from the FriendFeed API"
-        tornado.ioloop.IOLoop.instance().add_timeout(time.time() + 10, lambda: self.http_client.fetch("http://friendfeed-api.com/v2/feed/bret", callback=self.handle_request))
+            logging.info(json)
+            header = json['header']
+            if 'nsp.http.query.status' not in header or header['nsp.http.query.status'] != '200':
+                logging.error(json)
+                url = self.subscribe()
+                logging.info('push tunnel:\t%s' % (url))
+                waittime = waittime + 10
+            else:
+                interval = header['nsp.http.query.interval']
+                url = header['nsp.http.query.url']
+                if interval != '0':
+                    waittime = waittime + float(interval)
+                body = json['body']
+                if 'nsp.message.type' in header and 'nsp.event.type' in header and body is not None:
+                    source_uid = body['source.uid']
+                    if source_uid in self.users and self.users[source_uid]['status'] == '1':
+                        cid = body['nsp.event.cid']
+                        action = body['action']
+                        printer = body['printer']
+                        files = body['files']
+                        if action == 'print':
+                            for f in files:
+                                logging.info('downloading:%s %s %s' % (f['name'], f['size'], f['md5']))
+                                headers = {
+                                        'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                                        'Accept-Charset' : 'GBK,utf-8;q=0.7,*;q=0.3',
+                                        'Accept-Encoding' : 'gzip,deflate,sdch',
+                                        'Accept-Language' : 'zh-CN,zh;q=0.8',
+                                        'Connection' : 'keep-alive',
+                                        'User-Agent' : 'Mozilla/5.0 (Windows NT 5.1) AppleWebKit/535.7 (KHTML, like Gecko) Chrome/16.0.912.63 Safari/535.7',
+                                        'Referer' : 'http://www.dbank.com'
+                                }
+                                content = self.download(f['url'], **headers)
+                                if len(content) != int(f['size']):
+                                    logging.error('file size error %s %s' % (len(content), int(f['size'])))
+                                    continue
+                                if not os.path.exists('%s/data/' % (self.dirname)):
+                                    os.makedirs('%s/data/' % (self.dirname))
+                                origin_file = '%s/data/%s' % (self.dirname, f['name'])
+                                file_md5 = ''
+                                with open(origin_file, 'w+') as fp:
+                                    file_md5 = md5_for_data(content)
+                                    if file_md5 != f['md5']:
+                                        logging.error('file md5 error %s %s' % (file_md5, f['md5']))
+                                        continue
+                                    fp.write(content)
+                                logging.info('download success...')
+                                logging.info('printing...')
+                                ret = self.print_file('%s/data/' % (self.dirname), f['name'], printer)
+                                os.remove(origin_file)
+                                if ret is False:
+                                    logging.error('print error')
+                                    continue
+                                logging.info('print success...')
+                        elif action == 'config':
+                            pass
+        tornado.ioloop.IOLoop.instance().add_timeout(waittime, lambda: self.http_client.fetch(url, callback=self.handle_request, request_timeout=60))
 
 def getusername():
     return getpass.getuser()
@@ -204,19 +324,41 @@ def gethostname():
 def createAuthUrl():
     return 'http://localhost:%s/cloudprint/register' % (options.port)
 
+def md5_for_data(data):
+    md5 = hashlib.md5()
+    md5.update(data)
+    return md5.hexdigest()
+
+def md5_for_file(fp, block_size=2**20):
+    md5 = hashlib.md5()
+    while True:
+        data = fp.read(block_size)
+        if not data:
+            break
+        md5.update(data)
+    return md5.hexdigest()
+
 def main():
-    tornado.httpclient.AsyncHTTPClient.configure('tornado.curl_httpclient.CurlAsyncHTTPClient')
-    http_client = tornado.httpclient.AsyncHTTPClient()
-    print 'init client...'
-    client = Client(options.printer, http_client)
-    print 'client: ', client.client
-    url = createAuthUrl()
-    print url
-    # TODO subscribe
+    # 解析命令行
     tornado.options.parse_command_line()
+    # 必须指定一个printer
+    if options.printer is None or options.printer == '':
+        logging.error('printer must necessary')
+        sys.exit()
+    # 使用curl实现的异步客户端
+    tornado.httpclient.AsyncHTTPClient.configure('tornado.curl_httpclient.CurlAsyncHTTPClient')
+    # 长链接客户端
+    http_client = tornado.httpclient.AsyncHTTPClient()
+    logging.info('init client...')
+    client = Client(options.printer, http_client)
+    logging.info('client id:\t%s' % (client.client))
+    url = client.subscribe()
+    logging.info('push tunnel:\t%s' % (url))
+    http_client.fetch(url, callback=client.handle_request, request_timeout=60)
+    auth_url = createAuthUrl()
+    logging.info('register url:\t%s' % (auth_url))
     app = Application(client = client)
     app.listen(options.port)
-    http_client.fetch("http://friendfeed-api.com/v2/feed/bret", callback=client.handle_request)
     tornado.ioloop.IOLoop.instance().start()
 
 if __name__ == "__main__":

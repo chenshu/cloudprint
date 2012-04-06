@@ -27,7 +27,7 @@ def sendMsg():
     name = 'Getting Started.pdf'
     f3 = {'name' : name, 'size' : '127748', 'md5' : '2d75da7f0406283193cf04c3886c8574', 'url' : createDownloadUrl('c0n3la0jvh', '1', name)}
     files.append(f3)
-    ret = svc.send(message_type, {'nsp.event.uid' : uid, 'nsp.event.cid' : cid, 'action' : 'print', 'files' : files, 'source.uid' : uid})
+    ret = svc.send(message_type, {'nsp.event.cid' : cid, 'action' : 'print', 'files' : files, 'source.uid' : uid, 'printer' : 'hp_p2015dn'})
     print ret
 
 def createDownloadUrl(f, i, name):
