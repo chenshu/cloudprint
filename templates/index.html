@@ -1,13 +1,30 @@
-<html>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
     <head>
-        <title>云打印</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/> 
+        <title>{{ escape(handler.settings["title"]) }}</title>
     </head>
-    <body>
-        <script language="javascript">
-            var value = window.name;
-            value = eval('(' + value + ')');
-            location = "/cloudprint/auth/login" + location.search + "&sid=" + value.sid + "&secret=" + value.secret;
-        </script>
+    <body onload="init()">
+        <div>
+            <script language="javascript">
+                function init() {
+                    var value = window.name;
+                    window.name = "";
+                    if (value == "") {
+                        document.write('<div id="body">{% if current_user %}<a href="/cloudprint/auth/logout">Logout</a>{% else %}<a href="/cloudprint/register">Login</a>{% end %}</div>');
+                        return;
+                    }
+                    value = eval('(' + value + ')');
+                    url = location.search;
+                    if (url.indexOf("?") != -1) { 
+                        location = "/cloudprint/auth/login" + url + "&sid=" + value.sid + "&secret=" + value.secret;
+                    }
+                    else {
+                        location = "/cloudprint/auth/login" + "?sid=" + value.sid + "&secret=" + value.secret;
+                    }
+                }
+            </script>
+        </div>
     </body>
 
 </html>

@@ -11,6 +11,7 @@ import hashlib
 import getpass
 import logging
 import urlparse
+import threading
 import tornado.web
 import tornado.escape
 import tornado.ioloop
@@ -34,10 +35,11 @@ define("capability", default=u'nsp.cloudprint', type=str)
 class Application(tornado.web.Application):
     def __init__(self, **kwargs):
         handlers = [
-            (r"/cloudprint/", MainHandler),
+            (r"/cloudprint", MainHandler),
             (r"/cloudprint/auth/login", AuthLoginHandler),
             (r"/cloudprint/auth/logout", AuthLogoutHandler),
             (r"/cloudprint/register", RegisterHandler),
+            (r"/cloudprint/manage", ManageHandler),
         ]
         settings = dict(
             cookie_secret="43oETzCXQAGaYdkL5gEiGeJJFuYX7EQnp2QdTP1o/Vo=",
@@ -47,6 +49,7 @@ class Application(tornado.web.Application):
             xsrf_cookies=True,
             autoescape="xhtml_escape",
             debug=True,
+            title="云打印",
         )
         if kwargs:
             settings.update(kwargs)
@@ -65,11 +68,8 @@ class BaseHandler(tornado.web.RequestHandler):
             return None
         self.uid = '%s' % (ret['user.uid'])
         self.username = '%s' % (ret['user.username'])
-        return True
-
-class MainHandler(BaseHandler):
-    def get(self):
-        self.render("index.html")
+        user = {'uid' : self.uid, 'username' : self.username}
+        return user
 
 class NspMixin(object):
 
@@ -97,21 +97,28 @@ class AuthLoginHandler(BaseHandler, NspMixin):
         if self.get_argument("sid", None) and self.get_argument("secret", None):
             self.get_authenticated_user(self.async_callback(self._on_auth))
             return
-        self.authenticate_redirect("/cloudprint/?%s" % (self.request.query))
+        self.authenticate_redirect("/cloudprint?%s" % (self.request.query))
 
     def _on_auth(self, sid, secret):
         if not sid or not secret:
             raise tornado.web.HTTPError(500, "NSP auth failed")
         self.set_secure_cookie("sid", sid, None)
         self.set_secure_cookie("secret", secret, None)
-        url = self.get_argument("next")
+        url = self.get_argument("next", '/cloudprint')
         self.redirect(url)
 
 class AuthLogoutHandler(BaseHandler):
     def get(self):
         self.clear_cookie("sid")
         self.clear_cookie("secret")
-        self.write("You are now logged out")
+        self.redirect('/cloudprint')
+
+class MainHandler(BaseHandler):
+    def get(self):
+        if self.current_user is None:
+            self.render("index.html")
+            return
+        self.render("home.html", message="login success")
 
 class RegisterHandler(BaseHandler):
     @tornado.web.authenticated
@@ -120,6 +127,7 @@ class RegisterHandler(BaseHandler):
         attrs = {options.capability : {'app_name' : options.appname, 'client_id' : self.application.settings['client'].client, 'client_name' : machine, 'printer' : self.application.settings['client'].printer}}
         self.svc = self.nsp_user.service('nsp.app.capability')
         ret = self.svc.register(attrs)
+        message = 'register success'
         if ret is True:
             client = self.settings['client']
             if getattr(client, 'admin', None) is None:
@@ -131,10 +139,14 @@ class RegisterHandler(BaseHandler):
                 with open('%s' % (client.data_file), 'a+') as fp:
                     user = client.users[self.uid]
                     fp.write('%s\t%s\t%s\t%s%s' % (user['uid'], user['username'], user['status'], user['regdate'].strftime('%Y-%m-%d %H:%M:%S'), os.linesep))
-            self.write('register success<br/>')
         else:
-            self.write('register failure<br/>')
-        self.write('<a href="/cloudprint/auth/logout">Logout</a>')
+            message = 'register failure'
+        self.render('home.html', message=message)
+
+class ManageHandler(BaseHandler):
+    @tornado.web.authenticated
+    def get(self):
+        pass
 
 class Client(object):
     '''cloud printer client'''
@@ -248,19 +260,23 @@ class Client(object):
             return False
         return True
 
-    def handle_request(self, response):
+    def handle_response(self, response):
+        t = threading.Thread(target=self._handle, args=(response,))
+        t.start()
+
+    def _handle(self, response):
         waittime = time.time()
         if response.error:
-            logging.error(response.error)
+            logging.error('response error:\t%s' % (response.error))
             url = self.subscribe()
             logging.info('push tunnel:\t%s' % (url))
             waittime = waittime + 10
         else:
+            logging.info('response body:\t%s' % (response.body))
             json = json_decode(response.body)
-            logging.info(json)
             header = json['header']
             if 'nsp.http.query.status' not in header or header['nsp.http.query.status'] != '200':
-                logging.error(json)
+                logging.error('response status error:\t%s' % (json))
                 url = self.subscribe()
                 logging.info('push tunnel:\t%s' % (url))
                 waittime = waittime + 10
@@ -279,7 +295,7 @@ class Client(object):
                         files = body['files']
                         if action == 'print':
                             for f in files:
-                                logging.info('downloading:%s %s %s' % (f['name'], f['size'], f['md5']))
+                                logging.info('downloading:\t%s\t%s\t%s' % (f['name'], f['size'], f['md5']))
                                 headers = {
                                         'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                                         'Accept-Charset' : 'GBK,utf-8;q=0.7,*;q=0.3',
@@ -291,7 +307,7 @@ class Client(object):
                                 }
                                 content = self.download(f['url'], **headers)
                                 if len(content) != int(f['size']):
-                                    logging.error('file size error %s %s' % (len(content), int(f['size'])))
+                                    logging.error('file size error:\t%s\t%s\t%s' % (f['name'], len(content), int(f['size'])))
                                     continue
                                 if not os.path.exists('%s/data/' % (self.dirname)):
                                     os.makedirs('%s/data/' % (self.dirname))
@@ -300,20 +316,20 @@ class Client(object):
                                 with open(origin_file, 'w+') as fp:
                                     file_md5 = md5_for_data(content)
                                     if file_md5 != f['md5']:
-                                        logging.error('file md5 error %s %s' % (file_md5, f['md5']))
+                                        logging.error('file md5 error:\t%s\t%s\t%s' % (f['name'], file_md5, f['md5']))
                                         continue
                                     fp.write(content)
-                                logging.info('download success...')
-                                logging.info('printing...')
+                                logging.info('download success:\t%s' % (f['name']))
+                                logging.info('printing:\t%s' % (f['name']))
                                 ret = self.print_file('%s/data/' % (self.dirname), f['name'], printer)
                                 os.remove(origin_file)
                                 if ret is False:
-                                    logging.error('print error')
+                                    logging.error('print error:\t%s' % (f['name']))
                                     continue
-                                logging.info('print success...')
+                                logging.info('print success:\t%s' % (f['name']))
                         elif action == 'config':
                             pass
-        tornado.ioloop.IOLoop.instance().add_timeout(waittime, lambda: self.http_client.fetch(url, callback=self.handle_request, request_timeout=60))
+        tornado.ioloop.IOLoop.instance().add_timeout(waittime, lambda: self.http_client.fetch(url, callback=self.handle_response, request_timeout=60))
 
 def getusername():
     return getpass.getuser()
@@ -343,18 +359,17 @@ def main():
     tornado.options.parse_command_line()
     # 必须指定一个printer
     if options.printer is None or options.printer == '':
-        logging.error('printer must necessary')
+        logging.error('printer necessary')
         sys.exit()
     # 使用curl实现的异步客户端
     tornado.httpclient.AsyncHTTPClient.configure('tornado.curl_httpclient.CurlAsyncHTTPClient')
     # 长链接客户端
     http_client = tornado.httpclient.AsyncHTTPClient()
-    logging.info('init client...')
     client = Client(options.printer, http_client)
-    logging.info('client id:\t%s' % (client.client))
+    logging.info('init client:\t%s' % (client.client))
     url = client.subscribe()
     logging.info('push tunnel:\t%s' % (url))
-    http_client.fetch(url, callback=client.handle_request, request_timeout=60)
+    http_client.fetch(url, callback=client.handle_response, request_timeout=60)
     auth_url = createAuthUrl()
     logging.info('register url:\t%s' % (auth_url))
     app = Application(client = client)
