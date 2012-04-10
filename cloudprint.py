@@ -44,8 +44,8 @@ class Application(tornado.web.Application):
         settings = dict(
             cookie_secret="43oETzCXQAGaYdkL5gEiGeJJFuYX7EQnp2QdTP1o/Vo=",
             login_url="/cloudprint/auth/login",
-            template_path=os.path.join(os.path.dirname(__file__), "templates"),
-            static_path=os.path.join(os.path.dirname(__file__), "static"),
+            template_path=os.path.join("/var/run/cloudprint", "templates"),
+            static_path=os.path.join("/var/run/cloudprint", "static"),
             xsrf_cookies=True,
             autoescape="xhtml_escape",
             debug=True,
@@ -160,7 +160,8 @@ class Client(object):
         self.nsp_app = NSPClient(options.appid, options.appsecret)
 
         # local directory
-        self.dirname = os.path.dirname(os.path.realpath(__file__))
+        #self.dirname = os.path.dirname(os.path.realpath(__file__))
+        self.dirname = '/var/run/cloudprint'
 
         self.conf_file = '%s/conf.ini' % (self.dirname)
 
@@ -251,11 +252,11 @@ class Client(object):
             call(['/usr/bin/pdftops', pdf_file, ps_file])
             if not os.path.exists(ps_file):
                 return False
-            #call(['/usr/bin/lpr', '-P', printer, ps_file])
+            call(['/usr/bin/lpr', '-P', printer, ps_file])
             os.remove(ps_file)
         elif ext == '.txt':
             txt_file = '%s/%s' % (dirname, filename)
-            #call(['/usr/bin/lpr', '-P', printer, txt_file])
+            call(['/usr/bin/lpr', '-P', printer, txt_file])
         else:
             return False
         return True

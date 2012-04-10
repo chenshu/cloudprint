@@ -1,4 +1,4 @@
 *.pyc
-/tmp
-/data
+tmp/
+dist/
 *.ini
