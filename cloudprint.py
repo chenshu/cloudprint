@@ -44,8 +44,8 @@ class Application(tornado.web.Application):
         settings = dict(
             cookie_secret="43oETzCXQAGaYdkL5gEiGeJJFuYX7EQnp2QdTP1o/Vo=",
             login_url="/cloudprint/auth/login",
-            template_path=os.path.join("/var/run/cloudprint", "templates"),
-            static_path=os.path.join("/var/run/cloudprint", "static"),
+            template_path=os.path.join("/etc/cloudprint", "templates"),
+            static_path=os.path.join("/etc/cloudprint", "static"),
             xsrf_cookies=True,
             autoescape="xhtml_escape",
             debug=True,
@@ -161,7 +161,7 @@ class Client(object):
 
         # local directory
         #self.dirname = os.path.dirname(os.path.realpath(__file__))
-        self.dirname = '/var/run/cloudprint'
+        self.dirname = '/etc/cloudprint'
 
         self.conf_file = '%s/conf.ini' % (self.dirname)
 
@@ -330,7 +330,7 @@ class Client(object):
                                 logging.info('print success:\t%s' % (f['name']))
                         elif action == 'config':
                             pass
-        tornado.ioloop.IOLoop.instance().add_timeout(waittime, lambda: self.http_client.fetch(url, callback=self.handle_response, request_timeout=60))
+        tornado.ioloop.IOLoop.instance().add_timeout(waittime, lambda: self.http_client.fetch(url, callback=self.handle_response, request_timeout=300))
 
 def getusername():
     return getpass.getuser()
@@ -370,7 +370,7 @@ def main():
     logging.info('init client:\t%s' % (client.client))
     url = client.subscribe()
     logging.info('push tunnel:\t%s' % (url))
-    http_client.fetch(url, callback=client.handle_response, request_timeout=60)
+    http_client.fetch(url, callback=client.handle_response, request_timeout=300)
     auth_url = createAuthUrl()
     logging.info('register url:\t%s' % (auth_url))
     app = Application(client = client)
