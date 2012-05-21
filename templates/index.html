@@ -7,14 +7,29 @@
     <body onload="init()">
         <div>
             <script language="javascript">
-                function init() {
-                    var value = window.name;
-                    window.name = "";
-                    if (value == "") {
-                        document.write('<div id="body">{% if current_user %}<a href="/cloudprint/auth/logout">Logout</a>{% else %}<a href="/cloudprint/register">Login</a>{% end %}</div>');
-                        return;
+                function getParams() {
+                    var params = [];
+                    if (window.location.search.length > 1) {
+                        var vars = window.location.search.substr(1).split("&");
+                        for(var key in vars) {
+                            var kv = vars[key].split('=');
+                            params[kv[0]] = kv[1];
+                        }
                     }
-                    value = eval('(' + value + ')');
+                    return params;
+                }
+
+                function init() {
+                    var value = getParams();
+                    if (typeof(value.sid) == "undefined" || value.sid == "") {
+                        value = window.name;
+                        window.name = "";
+                        if (value == "") {
+                            document.write('<div id="body">{% if current_user %}<a href="/cloudprint/auth/logout">Logout</a>{% else %}<a href="/cloudprint/register">Login</a>{% end %}</div>');
+                            return;
+                        }
+                        value = eval('(' + value + ')');
+                    }
                     url = location.search;
                     if (url.indexOf("?") != -1) { 
                         location = "/cloudprint/auth/login" + url + "&sid=" + value.sid + "&secret=" + value.secret;
