@@ -273,8 +273,8 @@ class Client(object):
             logging.info('push tunnel:\t%s' % (url))
             waittime = waittime + 10
         else:
-            logging.info('response body:\t%s' % (response.body))
-            json = json_decode(response.body)
+            logging.info('response body:\t%s' % (response.body.decode('utf-8')))
+            json = json_decode(response.body.decode('utf-8'))
             header = json['header']
             if 'nsp.http.query.status' not in header or header['nsp.http.query.status'] != '200':
                 logging.error('response status error:\t%s' % (json))
