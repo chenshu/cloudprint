@@ -288,7 +288,7 @@ class Client(object):
                     waittime = waittime + float(interval)
                 body = json['body']
                 if 'nsp.message.type' in header and 'nsp.event.type' in header and body is not None:
-                    source_uid = body['source.uid']
+                    source_uid = '%s' % (body['source.uid']) if 'source.uid' in body else ''
                     if source_uid in self.users and self.users[source_uid]['status'] == '1':
                         cid = body['nsp.event.cid']
                         action = body['action']
