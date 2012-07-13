@@ -29,6 +29,7 @@ define("port", default=8888, help="run on the given port", type=int)
 define("appid", default=50033, type=int)
 define("appname", default=u'云打印', type=str)
 define("appsecret", default=u'Vulid3u3lVMBVRDbNJE0aI6QMKhjHiqK', type=str)
+#define("appsecret", default=u'test50033bba8df90acb8eb160a8087f', type=str)
 define("printer", default=u'', type=str)
 define("capability", default=u'nsp.cloudprint', type=str)
 
