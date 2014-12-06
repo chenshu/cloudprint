@@ -133,7 +133,7 @@ class RegisterHandler(BaseHandler):
         if token is None:
             err = ''
             try:
-                token = self.svc_push.register(channel, client.client);
+                token = self.svc_push.register(client.client, channel, client.client);
                 client.token = token
             except Exception, e:
                 err = eval(str(e))['error']

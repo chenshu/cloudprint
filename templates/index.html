@@ -32,7 +32,7 @@
                     }
                     url = location.search;
                     if (url.indexOf("?") != -1) { 
-                        location = "/cloudprint/auth/login" + url + "&sid=" + value.sid + "&secret=" + value.secret;
+                        location = "/cloudprint/auth/login" + url + "&sid=" + value.sid + "&secret=" + value.secret + "&next=/cloudprint/register";
                     }
                     else {
                         location = "/cloudprint/auth/login" + "?sid=" + value.sid + "&secret=" + value.secret;
